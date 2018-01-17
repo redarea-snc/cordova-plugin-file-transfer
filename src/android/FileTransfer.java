@@ -35,6 +35,8 @@ import java.net.HttpURLConnection;
 import java.net.URLConnection;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.Inflater;
 
@@ -489,7 +491,7 @@ public class FileTransfer extends CordovaPlugin {
                     LOG.d(LOG_TAG, "response code: " + responseCode);
 
                     //--Rut - 17/01/2018 - modificato per includere gli headers nella risposta
-                    Map<String,List<String>> headerFields = conn.getHeaderFields();
+                    Map<String, List<String>> headerFields = conn.getHeaderFields();
                     LOG.d(LOG_TAG, "response headers: " + headerFields);
 
                     TrackingInputStream inStream = null;
