@@ -30,6 +30,12 @@ public class FileUploadResult {
     private int responseCode = -1;      // HTTP response code
     private String response = null;     // HTTP response
     private String objectId = null;     // FileTransfer object id
+    //--Rut - 17/01/2018 - aggiunta response headers - anche su Android
+    private JSONObject headers = new JSONObject();
+
+    public void addResponseHeader(String header, String value) throws JSONException {
+        headers.put(header, value);
+    }
 
     public long getBytesSent() {
         return bytesSent;
@@ -68,6 +74,7 @@ public class FileUploadResult {
                 "{bytesSent:" + bytesSent +
                 ",responseCode:" + responseCode +
                 ",response:" + JSONObject.quote(response) +
-                ",objectId:" + JSONObject.quote(objectId) + "}");
+                ",objectId:" + JSONObject.quote(objectId) +
+                ",headers:" + headers.toString() + "}");
     }
 }

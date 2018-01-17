@@ -487,7 +487,11 @@ public class FileTransfer extends CordovaPlugin {
                     String responseString;
                     int responseCode = conn.getResponseCode();
                     LOG.d(LOG_TAG, "response code: " + responseCode);
-                    LOG.d(LOG_TAG, "response headers: " + conn.getHeaderFields());
+
+                    //--Rut - 17/01/2018 - modificato per includere gli headers nella risposta
+                    Map<String,List<String>> headerFields = conn.getHeaderFields();
+                    LOG.d(LOG_TAG, "response headers: " + headerFields);
+
                     TrackingInputStream inStream = null;
                     try {
                         inStream = getInputStream(conn);
@@ -519,6 +523,23 @@ public class FileTransfer extends CordovaPlugin {
                     // send request and retrieve response
                     result.setResponseCode(responseCode);
                     result.setResponse(responseString);
+
+                    //--Rut - 17/01/2018 - modificato per includere gli headers nella risposta
+                    for(String header: headerFields.keySet()) {
+                        List<String> values = headerFields.get(header);
+                        String headerValues = "";
+                        int multipleCount = 0;
+                        for(String val: values) {
+                            if(multipleCount > 0){
+                                headerValues += ", ";
+                            }
+                            headerValues += val;
+                        }
+
+                        if(header != null && header.length() > 0){
+                            result.addResponseHeader(header, headerValues);
+                        }
+                    }
 
                     context.sendPluginResult(new PluginResult(PluginResult.Status.OK, result.toJSONObject()));
                 } catch (FileNotFoundException e) {
