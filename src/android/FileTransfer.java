@@ -322,6 +322,9 @@ public class FileTransfer extends CordovaPlugin {
                 final Uri sourceUri = resourceApi.remapUri(
                         tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
 
+                //--Rut - 04/04/2018 - fix connessioni che rimangono 'appese' se abortite/fallite - dovrebbe forzare Java
+                // a re-inizializzare una socket, invece di tentare di riutilizzare l'eventuale precedente in cache
+                System.setProperty("http.keepAlive","false");
                 HttpURLConnection conn = null;
                 int totalBytes = 0;
                 int fixedLength = -1;
@@ -345,6 +348,10 @@ public class FileTransfer extends CordovaPlugin {
 
                     // Use a post method.
                     conn.setRequestMethod(httpMethod);
+
+                    //--Rut - 04/04/2018 - fix connessioni che rimangono 'appese' se abortite/fallite - header che indica
+                    // al server di non mantenere appesa la connessione
+                    conn.setRequestProperty("Connection", "close");
 
                     // if we specified a Content-Type header, don't do multipart form upload
                     boolean multipartFormUpload = (headers == null) || !headers.has("Content-Type");
@@ -562,6 +569,10 @@ public class FileTransfer extends CordovaPlugin {
                     LOG.e(LOG_TAG, error.toString(), t);
                     context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
                 } finally {
+                    //--Rut - 04/04/2018 - fix connessioni che rimangono 'appese' se abortite/fallite - chiusura esplicita
+                    // della socket
+                    conn.disconnect();
+
                     synchronized (activeRequests) {
                         activeRequests.remove(objectId);
                     }
