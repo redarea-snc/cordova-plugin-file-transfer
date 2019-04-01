@@ -29,6 +29,9 @@
     <repo>https://git-wip-us.apache.org/repos/asf/cordova-plugin-file-transfer.git</repo>
     <issue>https://issues.apache.org/jira/browse/CB/component/12320650</issue>
 
+    <preference name="UNIQUE_UPLOADS_TIMEOUT" default="60" />
+    <preference name="SENTRY_EXCEPTION_TRACKING" default="false" />
+
     <dependency id="cordova-plugin-file" version=">=5.0.0" />
 
     <js-module src="www/FileTransferError.js" name="FileTransferError">
@@ -44,11 +47,21 @@
         <config-file target="res/xml/config.xml" parent="/*">
             <feature name="FileTransfer" >
                 <param name="android-package" value="org.apache.cordova.filetransfer.FileTransfer"/>
+                <param name="onload" value="true" />
             </feature>
         </config-file>
 
         <config-file target="AndroidManifest.xml" parent="/*">
             <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+        </config-file>
+
+        <framework src="io.sentry:sentry-android:1.7.16" />
+        <framework src="org.slf4j:slf4j-nop:1.7.25" />
+
+        <resource-file src="src/android/res/filetransferconfig.xml" target="res/values/filetransferconfig.xml" />
+        <config-file target="app/src/main/res/values/filetransferconfig.xml" parent="/*">
+            <integer name="unique_uploads_timeout">$UNIQUE_UPLOADS_TIMEOUT</integer>
+            <string name="sentry_exception_tracking">$SENTRY_EXCEPTION_TRACKING</string>
         </config-file>
 
         <source-file src="src/android/FileTransfer.java" target-dir="src/org/apache/cordova/filetransfer" />

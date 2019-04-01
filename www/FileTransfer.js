@@ -90,6 +90,15 @@ var FileTransfer = function() {
     this.onprogress = null; // optional callback
 };
 
+FileTransfer.prototype.deleteUniqueUploadHash = function(successCallback, errorCallback, fileHash){
+    if (cordova.platformId.toLowerCase() == "android"){
+        exec(successCallback, errorCallback, 'FileTransfer', 'deleteUniqueUploadHash', [fileHash]);
+        return;
+    }
+
+    successCallback();
+};
+
 /**
 * Given an absolute file path, uploads a file on the device to a remote server
 * using a multipart HTTP request.
@@ -110,6 +119,7 @@ FileTransfer.prototype.upload = function(filePath, server, successCallback, erro
     var chunkedMode = true;
     var headers = null;
     var httpMethod = null;
+    var uniqueUploadHash = null;
     var basicAuthHeader = getBasicAuthHeader(server);
     if (basicAuthHeader) {
         server = server.replace(getUrlCredentials(server) + '@', '');
@@ -139,6 +149,9 @@ FileTransfer.prototype.upload = function(filePath, server, successCallback, erro
         else {
             params = {};
         }
+        if (options.uniqueUploadHash !== null || typeof options.uniqueUploadHash != "undefined") {
+            uniqueUploadHash = options.uniqueUploadHash;
+        }
     }
 
     if (cordova.platformId === "windowsphone") {
@@ -163,7 +176,7 @@ FileTransfer.prototype.upload = function(filePath, server, successCallback, erro
             }
         }
     };
-    exec(win, fail, 'FileTransfer', 'upload', [filePath, server, fileKey, fileName, mimeType, params, trustAllHosts, chunkedMode, headers, this._id, httpMethod]);
+    exec(win, fail, 'FileTransfer', 'upload', [filePath, server, fileKey, fileName, mimeType, params, trustAllHosts, chunkedMode, headers, this._id, httpMethod, uniqueUploadHash]);
 };
 
 /**

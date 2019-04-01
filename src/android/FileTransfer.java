@@ -35,9 +35,19 @@ import java.net.HttpURLConnection;
 import java.net.URLConnection;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.Inflater;
 
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.util.Log;
+import io.sentry.Sentry;
+import io.sentry.SentryClient;
+import io.sentry.android.AndroidSentryClientFactory;
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaResourceApi;
@@ -67,6 +77,7 @@ public class FileTransfer extends CordovaPlugin {
     public static int CONNECTION_ERR = 3;
     public static int ABORTED_ERR = 4;
     public static int NOT_MODIFIED_ERR = 5;
+    public static int STORAGE_ERR = 6;
 
     private static HashMap<String, RequestContext> activeRequests = new HashMap<String, RequestContext>();
     private static final int MAX_BUFFER_SIZE = 16 * 1024;
@@ -78,6 +89,7 @@ public class FileTransfer extends CordovaPlugin {
         CallbackContext callbackContext;
         HttpURLConnection connection;
         boolean aborted;
+        PluginResult pluginResult;
         RequestContext(String source, String target, CallbackContext callbackContext) {
             this.source = source;
             this.target = target;
@@ -85,12 +97,19 @@ public class FileTransfer extends CordovaPlugin {
         }
         void sendPluginResult(PluginResult pluginResult) {
             synchronized (this) {
+                this.pluginResult = pluginResult;
                 if (!aborted) {
                     callbackContext.sendPluginResult(pluginResult);
                 }
             }
         }
     }
+
+    private boolean SENTRY_TRACKING = false;
+    private String UNIQUE_UPLOADS_DB;
+    private long UNIQUE_UPLOADS_TIMEOUT = 60 * 1000;    // Default 1 minute
+    private SharedPreferences uniqueUploadsStorage;
+    private SentryClient sentryClient;
 
     /**
      * Adds an interface method to an InputStream to return the number of bytes
@@ -163,6 +182,61 @@ public class FileTransfer extends CordovaPlugin {
     }
 
     @Override
+    protected void pluginInitialize() {
+        // Loads timeout for uniqueupload from configuration
+        int uniqueUploadTimeoutId = cordova.getActivity().getResources().getIdentifier("unique_uploads_timeout", "integer", cordova.getActivity().getPackageName());
+        int uniqueUploadTimeout =  cordova.getActivity().getResources().getInteger(uniqueUploadTimeoutId);
+        // Config is in seconds, convert to millis
+        UNIQUE_UPLOADS_TIMEOUT = uniqueUploadTimeout * 1000;
+
+        // Initializes unique uploads db (in shared preferences file), and cleans potential old uploads up (older than a day)
+        UNIQUE_UPLOADS_DB = cordova.getActivity().getPackageName() + ".FileTransferUniqueUploads";
+        uniqueUploadsStorage = cordova.getActivity().getSharedPreferences(UNIQUE_UPLOADS_DB, Context.MODE_PRIVATE);
+
+        long now = System.currentTimeMillis();
+
+        try{
+            Map<String, ?> uploadEntries = uniqueUploadsStorage.getAll();
+            if(uploadEntries != null){
+                SharedPreferences.Editor editor = uniqueUploadsStorage.edit();
+                for(String uploadHash: uploadEntries.keySet()){
+                    long hoursDifference = 999;
+
+                    String uploadJson = (String) uploadEntries.get(uploadHash);
+                    if(uploadJson != null){
+                        JSONObject uploadStatus = new JSONObject(uploadJson);
+                        long uploadLastProgress = uploadStatus.getLong("lastUpdated");
+                        if(uploadLastProgress > 0){
+                            hoursDifference = TimeUnit.MILLISECONDS.toHours(now - uploadLastProgress);
+                        }
+
+                        // Old upload (older than a day), delete from db
+                        if(hoursDifference > 24){
+                            editor.remove(uploadHash);
+                        }
+                    }
+                }
+                editor.commit();
+            }
+
+        }catch (Exception e){
+            LOG.e(LOG_TAG, e.toString(), e);
+            _sentryCapture(e);
+        }
+
+        // Redarea - Check if Sentry tracking is enabled
+        int sentryTrackingFlagId = cordova.getActivity().getResources().getIdentifier("sentry_exception_tracking", "string", cordova.getActivity().getPackageName());
+        String sentryTrackingFlag =  cordova.getActivity().getResources().getString(sentryTrackingFlagId);
+
+        SENTRY_TRACKING = "true".equals(sentryTrackingFlag);
+        if(SENTRY_TRACKING){
+            String sentryDsn = "https://c0104a4387c34c768269eaa3ee20ee17:247e3dfa541c480f9e18211340896205@sentry.io/1424189";
+            Sentry.init(sentryDsn, new AndroidSentryClientFactory(cordova.getActivity()));
+            sentryClient = Sentry.getStoredClient();
+        }
+    }
+
+    @Override
     public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
         if (action.equals("upload") || action.equals("download")) {
             String source = args.getString(0);
@@ -174,7 +248,20 @@ public class FileTransfer extends CordovaPlugin {
                 download(source, target, args, callbackContext);
             }
             return true;
-        } else if (action.equals("abort")) {
+        }
+        else if(action.equals("deleteUniqueUploadHash")){
+            String uniqueUploadHash = args.getString(0);
+            if(uniqueUploadHash != null && uniqueUploadsStorage.contains(uniqueUploadHash)){
+                SharedPreferences.Editor editor = uniqueUploadsStorage.edit();
+                editor.remove(uniqueUploadHash);
+                editor.commit();
+
+                Log.e(LOG_TAG, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ UNIQUEUPLOADS - DELETED UPLOAD HASH " + uniqueUploadHash);
+            }
+
+            callbackContext.success();
+        }
+        else if (action.equals("abort")) {
             String objectId = args.getString(0);
             abort(objectId);
             callbackContext.success();
@@ -265,7 +352,7 @@ public class FileTransfer extends CordovaPlugin {
      * args[5] params        key:value pairs of user-defined parameters
      * @return FileUploadResult containing result of upload request
      */
-    private void upload(final String source, final String target, JSONArray args, CallbackContext callbackContext) throws JSONException {
+    private void upload(final String source, final String target, final JSONArray args, final CallbackContext callbackContext) throws JSONException {
         LOG.d(LOG_TAG, "upload " + source + " to " +  target);
 
         // Setup the options
@@ -279,6 +366,8 @@ public class FileTransfer extends CordovaPlugin {
         final JSONObject headers = args.optJSONObject(8) == null ? params.optJSONObject("headers") : args.optJSONObject(8);
         final String objectId = args.getString(9);
         final String httpMethod = getArgument(args, 10, "POST");
+        // Only activate unique upload on demand
+        final String uniqueUploadHash = args.getString(11);
 
         final CordovaResourceApi resourceApi = webView.getResourceApi();
 
@@ -290,6 +379,7 @@ public class FileTransfer extends CordovaPlugin {
         LOG.d(LOG_TAG, "headers: " + headers);
         LOG.d(LOG_TAG, "objectId: " + objectId);
         LOG.d(LOG_TAG, "httpMethod: " + httpMethod);
+        LOG.d(LOG_TAG, "uniqueUploadHash: " + uniqueUploadHash);
 
         final Uri targetUri = resourceApi.remapUri(Uri.parse(target));
 
@@ -311,6 +401,121 @@ public class FileTransfer extends CordovaPlugin {
             public void run() {
                 if (context.aborted) {
                     return;
+                }
+
+                //Handle possible callbacks belonging to a destroyed activity (can often happen putting cordova apps in
+                // background) - do not leave hanging threads in this case
+                if(cordova.getActivity().isDestroyed() || cordova.getActivity().isFinishing()){
+                    return;
+                }
+
+                // Upload has to run unique - check for concurrent thread already sending this file
+                JSONObject uniqueUploadStatus = null;
+                if(!"null".equals(uniqueUploadHash) && uniqueUploadHash != null && !uniqueUploadHash.isEmpty()){
+                    String uploadJson = null;
+                    synchronized (uniqueUploadsStorage){
+                        if (uniqueUploadsStorage.contains(uniqueUploadHash)) {
+                            uploadJson = uniqueUploadsStorage.getString(uniqueUploadHash, null);
+                        }
+                    }
+
+                    if(uploadJson != null){
+                        try{
+                            JSONObject uploadStatus = new JSONObject(uploadJson);
+
+                            // Initiator of this upload hash has finished - return that result
+                            if(uploadStatus.has("resultStatus")){
+                                int resultStatus = uploadStatus.getInt("resultStatus");
+                                PluginResult.Status[] statuses = PluginResult.Status.values();
+                                PluginResult.Status outputStatus = statuses[resultStatus];
+
+                                PluginResult callbackOutput = null;
+                                if(uploadStatus.has("uploadResult")){
+                                    JSONObject uploadResult = uploadStatus.getJSONObject("uploadResult");
+                                    callbackOutput = new PluginResult(outputStatus, uploadResult);
+                                }
+                                else{
+                                    callbackOutput = new PluginResult(outputStatus);
+                                }
+
+
+                                Log.e(LOG_TAG, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ UNIQUEUPLOAD - concurrent thread FOUND AND RETURN RESULT");
+                                context.sendPluginResult(callbackOutput);
+
+                                synchronized(activeRequests){
+                                    activeRequests.remove(objectId);
+                                }
+                                return;
+                            }
+
+                            // Upload initiator still in progress - check for timeout
+                            long uploadLastProgress = uploadStatus.getLong("lastUpdated");
+                            // Gives 5 extra seconds for timeout, to give it time to catch connection exception timeout
+                            // and return result
+                            long timeoutValue = UNIQUE_UPLOADS_TIMEOUT + (1000 * 5);
+                            long now = System.currentTimeMillis();
+
+                            // Initiator thread still prcessing, wait for it to finish
+                            if((now - uploadLastProgress) < timeoutValue){
+                                Log.e(LOG_TAG, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ UNIQUEUPLOAD - concurrent thread retry in 1 sec");
+                                Timer timer = new Timer();
+
+                                //Timer schedule - not blocking thread (like Thread.sleep does)
+                                timer.schedule(new TimerTask() {
+                                    @Override
+                                    public void run() {
+                                        try {
+                                            // Calling upload again restarts the checking process
+                                            upload(source, target, args, callbackContext);
+                                        }catch (Exception e){
+                                            LOG.e(LOG_TAG, e.toString(), e);
+                                            _sentryCapture(e);
+                                        }
+
+                                    }
+                                }, 1000);
+
+                                return;
+                            }
+
+                            // Inititator thread timeout - go on and behave like initiator
+                            Log.e(LOG_TAG, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ UNIQUEUPLOAD - concurrent thread TIMEOUT - RESTART");
+                        }catch (JSONException e){
+                            LOG.e(LOG_TAG, e.toString(), e);
+                            _sentryCapture(e);
+                        }
+
+                    }
+
+                    //Handle possible callbacks belonging to a destroyed activity (can often happen putting cordova apps in
+                    // background) - do not leave hanging threads in this case
+                    if(cordova.getActivity().isDestroyed() || cordova.getActivity().isFinishing()){
+                        return;
+                    }
+
+                    //********************************************
+                    // First upload attempt - mark start in storage
+                    //********************************************
+                    try{
+                        uniqueUploadStatus = new JSONObject();
+                        uniqueUploadStatus.put("lastUpdated", System.currentTimeMillis());
+                        SharedPreferences.Editor editor = uniqueUploadsStorage.edit();
+                        editor.putString(uniqueUploadHash, uniqueUploadStatus.toString());
+                        editor.commit();
+                        System.out.println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ UNIQUEUPLOAD - start unique upload with hash " + uniqueUploadHash);
+                    }catch (Exception e){
+                        // Start in storage data flag failed
+                        JSONObject error = createFileTransferError(STORAGE_ERR, source, target, null, e);
+                        LOG.e(LOG_TAG, error.toString(), e);
+                        context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+
+                        synchronized(activeRequests){
+                            activeRequests.remove(objectId);
+                        }
+                        _sentryCapture(e);
+                        return;
+                    }
+
                 }
 
                 // We should call remapUri on background thread otherwise it throws
@@ -343,6 +548,11 @@ public class FileTransfer extends CordovaPlugin {
 
                     // Use a post method.
                     conn.setRequestMethod(httpMethod);
+
+                    // Unique uploads - Set an upload timeout
+                    if(uniqueUploadStatus != null){
+                        conn.setConnectTimeout((int) UNIQUE_UPLOADS_TIMEOUT);
+                    }
 
                     // if we specified a Content-Type header, don't do multipart form upload
                     boolean multipartFormUpload = (headers == null) || !headers.has("Content-Type");
@@ -466,6 +676,19 @@ public class FileTransfer extends CordovaPlugin {
                             PluginResult progressResult = new PluginResult(PluginResult.Status.OK, progress.toJSONObject());
                             progressResult.setKeepCallback(true);
                             context.sendPluginResult(progressResult);
+                            System.out.println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ UNIQUEUPLOAD PROGRESS UPLOAD: " + progress.toJSONObject().toString());
+
+                            if(uniqueUploadStatus != null){
+                                uniqueUploadStatus.put("lastUpdated", System.currentTimeMillis());
+                                synchronized (uniqueUploadsStorage){
+                                    SharedPreferences.Editor editor = uniqueUploadsStorage.edit();
+                                    editor.putString(uniqueUploadHash, uniqueUploadStatus.toString());
+                                    editor.commit();
+                                }
+                            }
+
+                            //TODO - this is useful for testing and simulate slow background upload - remove in production
+//                            Thread.sleep(1000);
                         }
 
                         if (multipartFormUpload) {
@@ -533,12 +756,36 @@ public class FileTransfer extends CordovaPlugin {
                 } catch (JSONException e) {
                     LOG.e(LOG_TAG, e.getMessage(), e);
                     context.sendPluginResult(new PluginResult(PluginResult.Status.JSON_EXCEPTION));
+                    _sentryCapture(e);
                 } catch (Throwable t) {
                     // Shouldn't happen, but will
                     JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, conn, t);
                     LOG.e(LOG_TAG, error.toString(), t);
                     context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+                    _sentryCapture(t);
                 } finally {
+                    // Unique upload - update status with result
+                    if(uniqueUploadStatus != null){
+                        PluginResult pluginResult = context.pluginResult;
+                        System.out.println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ UNIQUEUPLOAD - FINISHED - SEND PLUGIN RESULT FOR CONCURRENT THREADS => " + uniqueUploadHash + "\n" + pluginResult.getMessage());
+                        try{
+                            uniqueUploadStatus.put("lastUpdated", System.currentTimeMillis());
+                            uniqueUploadStatus.put("resultStatus", pluginResult.getStatus());
+                            if(pluginResult.getMessageType() == PluginResult.MESSAGE_TYPE_JSON){
+                                uniqueUploadStatus.put("uploadResult", new JSONObject(pluginResult.getMessage()));
+                            }
+
+                            synchronized (uniqueUploadsStorage){
+                                SharedPreferences.Editor editor = uniqueUploadsStorage.edit();
+                                editor.putString(uniqueUploadHash, uniqueUploadStatus.toString());
+                                editor.commit();
+                            }
+                        }catch (JSONException e){
+                            LOG.e(LOG_TAG, e.getMessage(), e);
+                            _sentryCapture(e);
+                        }
+                    }
+
                     synchronized (activeRequests) {
                         activeRequests.remove(objectId);
                     }
@@ -927,6 +1174,17 @@ public class FileTransfer extends CordovaPlugin {
                     }
                 }
             });
+        }
+    }
+
+    private void _sentryCapture(Throwable throwable){
+        if(SENTRY_TRACKING){
+            // Redarea - This is a security hack - if Android activities are killed, all static fields are reinitiliazed
+            // to their default values
+            // We save the Sentry client as a private class field, and make sure that it is initted every time a manual
+            // capture is sent
+            Sentry.setStoredClient(sentryClient);
+            Sentry.capture(throwable);
         }
     }
 }
