@@ -356,7 +356,7 @@ public class FileTransfer extends CordovaPlugin {
                     //--Rut - 08/05/2019 - impostazione di un timeout di connessione più breve (abbiamo diversi casi di
                     // connessioni in timeout, come ad esempio è probabile il fotografo Ravaioli
                     conn.setConnectTimeout(10 * 1000);  //Tutto a 10 secondi
-                    conn.setReadTimeout(10 * 1000);
+                    conn.setReadTimeout(15 * 1000);
 
                     //--Rut - 04/04/2018 - fix connessioni che rimangono 'appese' se abortite/fallite - header che indica
                     // al server di non mantenere appesa la connessione
