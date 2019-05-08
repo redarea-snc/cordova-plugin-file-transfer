@@ -185,6 +185,13 @@ public class FileTransfer extends CordovaPlugin {
         return false;
     }
 
+    @Override
+    protected void pluginInitialize() {
+        //--Rut - 04/04/2018 - fix connessioni che rimangono 'appese' se abortite/fallite - dovrebbe forzare Java
+        // a re-inizializzare una socket, invece di tentare di riutilizzare l'eventuale precedente in cache
+        System.setProperty("http.keepAlive","false");
+    }
+
     private static void addHeadersToRequest(URLConnection connection, JSONObject headers) {
         try {
             for (Iterator<?> iter = headers.keys(); iter.hasNext(); ) {
@@ -322,9 +329,6 @@ public class FileTransfer extends CordovaPlugin {
                 final Uri sourceUri = resourceApi.remapUri(
                         tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
 
-                //--Rut - 04/04/2018 - fix connessioni che rimangono 'appese' se abortite/fallite - dovrebbe forzare Java
-                // a re-inizializzare una socket, invece di tentare di riutilizzare l'eventuale precedente in cache
-                System.setProperty("http.keepAlive","false");
                 HttpURLConnection conn = null;
                 int totalBytes = 0;
                 int fixedLength = -1;
@@ -348,6 +352,11 @@ public class FileTransfer extends CordovaPlugin {
 
                     // Use a post method.
                     conn.setRequestMethod(httpMethod);
+
+                    //--Rut - 08/05/2019 - impostazione di un timeout di connessione più breve (abbiamo diversi casi di
+                    // connessioni in timeout, come ad esempio è probabile il fotografo Ravaioli
+                    conn.setConnectTimeout(10 * 1000);  //Tutto a 10 secondi
+                    conn.setReadTimeout(10 * 1000);
 
                     //--Rut - 04/04/2018 - fix connessioni che rimangono 'appese' se abortite/fallite - header che indica
                     // al server di non mantenere appesa la connessione
