@@ -55,7 +55,7 @@
             <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
         </config-file>
 
-        <framework src="io.sentry:sentry-android:1.7.16" />
+        <framework src="io.sentry:sentry-android:1.7.27" />
         <framework src="org.slf4j:slf4j-nop:1.7.25" />
 
         <resource-file src="src/android/res/filetransferconfig.xml" target="res/values/filetransferconfig.xml" />

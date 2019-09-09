@@ -748,11 +748,13 @@ public class FileTransfer extends CordovaPlugin {
                     JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, conn, e);
                     LOG.e(LOG_TAG, error.toString(), e);
                     context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+                    _sentryCapture(e);
                 } catch (IOException e) {
                     JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, conn, e);
                     LOG.e(LOG_TAG, error.toString(), e);
                     LOG.e(LOG_TAG, "Failed after uploading " + totalBytes + " of " + fixedLength + " bytes.");
                     context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+                    _sentryCapture(e);
                 } catch (JSONException e) {
                     LOG.e(LOG_TAG, e.getMessage(), e);
                     context.sendPluginResult(new PluginResult(PluginResult.Status.JSON_EXCEPTION));
@@ -873,6 +875,7 @@ public class FileTransfer extends CordovaPlugin {
                     msg = throwable.toString();
                 }
                 error.put("exception", msg);
+                error.put("trace", Log.getStackTraceString(throwable));
             }
         } catch (JSONException e) {
             LOG.e(LOG_TAG, e.getMessage(), e);
